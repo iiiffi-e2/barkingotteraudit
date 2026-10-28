@@ -1,0 +1,248 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum AuditStatus {
+  QUEUED
+  ANALYZING_MOBILE
+  ANALYZING_DESKTOP
+  REVIEWING_METRICS
+  IDENTIFYING_OPPORTUNITIES
+  PREPARING_REPORT
+  COMPLETED
+  PARTIAL
+  FAILED
+  EXPIRED
+}
+
+enum AuditSource {
+  PUBLIC_WEB
+  HOMEPAGE_WIDGET
+  PUBLIC_RERUN
+  ADMIN_RERUN
+  API
+}
+
+enum DeviceCategory {
+  MOBILE
+  DESKTOP
+}
+
+enum RunStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum CruxDataScope {
+  PAGE
+  ORIGIN
+  UNAVAILABLE
+}
+
+enum CruxOverallStatus {
+  PASSED
+  FAILED
+  UNAVAILABLE
+}
+
+enum PriorityLevel {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum ComplexityBucket {
+  STRAIGHTFORWARD
+  INVESTIGATION
+  COMPLEX
+}
+
+enum ConfidenceLevel {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  PROPOSAL_SENT
+  CONVERTED
+  CLOSED
+}
+
+model Audit {
+  id                String          @id @default(cuid())
+  requestedUrl      String
+  normalizedUrl     String
+  finalUrl          String?
+  hostname          String
+  status            AuditStatus     @default(QUEUED)
+  source            AuditSource     @default(PUBLIC_WEB)
+  dedupeKey         String?
+  cachedFromAuditId String?
+  detectedPlatform  String?
+  platformSignals   Json?
+  isDemoMode        Boolean         @default(false)
+  requesterIpHash   String?
+  createdAt         DateTime        @default(now())
+  startedAt         DateTime?
+  completedAt       DateTime?
+  expiresAt         DateTime?
+  errorCode         String?
+  errorMessage      String?
+
+  runs              AuditRun[]
+  cruxSnapshots     CruxSnapshot[]
+  aiAnalyses        AIAnalysis[]
+  leads             Lead[]
+  events            AuditEvent[]
+
+  @@index([normalizedUrl, createdAt(sort: Desc)])
+  @@index([hostname, createdAt(sort: Desc)])
+  @@index([dedupeKey, status, createdAt(sort: Desc)])
+  @@index([status, createdAt(sort: Desc)])
+}
+
+model AuditRun {
+  id                 String         @id @default(cuid())
+  auditId            String
+  device             DeviceCategory
+  status             RunStatus      @default(PENDING)
+  performanceScore   Int?
+  accessibilityScore Int?
+  bestPracticesScore Int?
+  seoScore           Int?
+  lighthouseVersion  String?
+  fetchedAt          DateTime?
+  requestedUrl       String?
+  finalUrl           String?
+  normalizedMetrics  Json?
+  warnings           Json?
+  runtimeError       Json?
+  configSettings     Json?
+  rawResultReference String?
+  errorMessage       String?
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+
+  audit              Audit          @relation(fields: [auditId], references: [id], onDelete: Cascade)
+  opportunities      Opportunity[]
+
+  @@unique([auditId, device])
+  @@index([auditId])
+  @@index([performanceScore])
+}
+
+model CruxSnapshot {
+  id               String            @id @default(cuid())
+  auditId          String
+  device           DeviceCategory
+  dataScope        CruxDataScope     @default(UNAVAILABLE)
+  sourceIdentifier String
+  overallStatus    CruxOverallStatus @default(UNAVAILABLE)
+  metricValues     Json
+  collectionPeriod Json?
+  createdAt        DateTime          @default(now())
+
+  audit            Audit             @relation(fields: [auditId], references: [id], onDelete: Cascade)
+
+  @@unique([auditId, device])
+  @@index([auditId])
+}
+
+model Opportunity {
+  id                      String           @id @default(cuid())
+  auditRunId              String
+  sourceAuditIds          Json
+  title                   String
+  originalTitle           String
+  category                String
+  priority                PriorityLevel
+  complexity              ComplexityBucket
+  confidence              ConfidenceLevel
+  explanation             String
+  whyItMatters            String
+  recommendation          String
+  technicalRecommendation String
+  documentationUrl        String?
+  evidence                Json
+  estimatedSavings        Json
+  impactScore             Float            @default(0)
+  createdAt               DateTime         @default(now())
+
+  auditRun                AuditRun         @relation(fields: [auditRunId], references: [id], onDelete: Cascade)
+
+  @@index([auditRunId, priority, impactScore(sort: Desc)])
+}
+
+model AIAnalysis {
+  id            String   @id @default(cuid())
+  auditId       String
+  model         String
+  promptVersion String
+  isFallback    Boolean  @default(false)
+  output        Json
+  status        String   @default("COMPLETED")
+  createdAt     DateTime @default(now())
+
+  audit         Audit    @relation(fields: [auditId], references: [id], onDelete: Cascade)
+
+  @@index([auditId, createdAt(sort: Desc)])
+}
+
+model Lead {
+  id               String     @id @default(cuid())
+  auditId          String?
+  name             String
+  email            String
+  company          String?
+  websiteUrl       String
+  goalOrConcern    String?
+  message          String?
+  internalNotes    String?
+  source           String     @default("OPTIMIZATION_PLAN")
+  marketingConsent Boolean    @default(false)
+  status           LeadStatus @default(NEW)
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+
+  audit            Audit?     @relation(fields: [auditId], references: [id], onDelete: SetNull)
+
+  @@index([email])
+  @@index([status, createdAt(sort: Desc)])
+  @@index([auditId])
+}
+
+model AuditEvent {
+  id        String   @id @default(cuid())
+  auditId   String
+  eventType String
+  eventData Json?
+  createdAt DateTime @default(now())
+
+  audit     Audit    @relation(fields: [auditId], references: [id], onDelete: Cascade)
+
+  @@index([auditId, createdAt(sort: Asc)])
+}
+
+model AdminUser {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  role      String   @default("ADMIN")
+  createdAt DateTime @default(now())
+}
+
+model Settings {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}
