@@ -1,5 +1,20 @@
-import crypto from "crypto";
-import net from "net";
+function isIPv4Format(host: string): boolean {
+  const parts = host.split(".");
+  if (parts.length !== 4) return false;
+  for (const part of parts) {
+    if (!/^\d{1,3}$/.test(part)) return false;
+    if (part.length > 1 && part.startsWith("0")) return false;
+    const n = Number(part);
+    if (n < 0 || n > 255) return false;
+  }
+  return true;
+}
+
+function isIPv6Format(host: string): boolean {
+  const clean = host.replace(/^\[|\]$/g, "");
+  if (!clean.includes(":")) return false;
+  return /^[0-9a-f:.]+$/i.test(clean);
+}
 
 export interface UrlValidationResult {
   valid: boolean;
@@ -145,7 +160,7 @@ function isPrivateOrReservedIpv6(rawHost: string): boolean {
   // IPv4-mapped IPv6 ::ffff:a.b.c.d or hex ::ffff:7f00:1
   if (ip.includes("::ffff:")) {
     const v4Part = ip.split("::ffff:")[1];
-    if (v4Part && net.isIPv4(v4Part)) {
+    if (v4Part && isIPv4Format(v4Part)) {
       return isPrivateOrReservedIpv4(v4Part);
     }
     return true;
@@ -160,7 +175,7 @@ function isSuspiciousNumericHost(hostname: string): boolean {
   const labels = hostname.split(".");
   if (labels.every((label) => /^\d+$/.test(label) || /^0x[0-9a-f]+$/i.test(label))) {
     // All numeric/hex segments: if not standard decimal IPv4, block immediately
-    if (!net.isIPv4(hostname)) return true;
+    if (!isIPv4Format(hostname)) return true;
     // Also block leading zeroes (octal notation like 0177.0.0.1)
     if (labels.some((l) => l.length > 1 && l.startsWith("0"))) return true;
   }
@@ -281,15 +296,6 @@ export function validateAndNormalizeUrl(
     };
   }
 
-  // Restrict non-standard ports
-  if (parsed.port && parsed.port !== "80" && parsed.port !== "443") {
-    return {
-      valid: false,
-      errorCode: "UNSUPPORTED_PORT",
-      errorMessage: "Only standard web ports (80 and 443) are supported for public website analysis.",
-    };
-  }
-
   const hostname = parsed.hostname.toLowerCase().replace(/\.$/, "");
   if (!hostname) {
     return {
@@ -311,18 +317,27 @@ export function validateAndNormalizeUrl(
     };
   }
 
+  // Restrict non-standard ports
+  if (parsed.port && parsed.port !== "80" && parsed.port !== "443") {
+    return {
+      valid: false,
+      errorCode: "UNSUPPORTED_PORT",
+      errorMessage: "Only standard web ports (80 and 443) are supported for public website analysis.",
+    };
+  }
+
   // Check IPv6 literal
-  if (hostname.startsWith("[") || net.isIPv6(hostname)) {
+  if (hostname.startsWith("[") || isIPv6Format(hostname)) {
     const cleanV6 = hostname.replace(/^\[|\]$/g, "");
-    if (!net.isIPv6(cleanV6) || isPrivateOrReservedIpv6(cleanV6)) {
+    if (!isIPv6Format(cleanV6) || isPrivateOrReservedIpv6(cleanV6)) {
       return {
         valid: false,
         errorCode: "PRIVATE_OR_LOCAL_ADDRESS",
         errorMessage: "Private, loopback, or reserved IPv6 addresses cannot be analyzed.",
       };
     }
-  } else if (isSuspiciousNumericHost(hostname)) {
-    if (net.isIPv4(hostname)) {
+  } else if (isSuspiciousNumericHost(hostname) || isIPv4Format(hostname)) {
+    if (isIPv4Format(hostname)) {
       if (isPrivateOrReservedIpv4(hostname)) {
         return {
           valid: false,
@@ -410,9 +425,23 @@ export function validateAndNormalizeUrl(
 
 export function computeAuditDedupeKey(normalizedUrl: string, cacheBucketHours = 24): string {
   const bucket = Math.floor(Date.now() / (cacheBucketHours * 3600 * 1000));
-  return crypto
-    .createHash("sha256")
-    .update(`v1:${normalizedUrl.toLowerCase()}:${bucket}`)
-    .digest("hex")
-    .slice(0, 32);
+  const input = `v1:${normalizedUrl.toLowerCase()}:${bucket}`;
+  let h1 = 0xdeadbeef ^ input.length;
+  let h2 = 0x41c6ce57 ^ input.length;
+  let h3 = 0x9e3779b9 ^ input.length;
+  let h4 = 0x85ebca6b ^ input.length;
+  for (let i = 0; i < input.length; i++) {
+    const ch = input.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+    h3 = Math.imul(h3 ^ ch, 2246822507);
+    h4 = Math.imul(h4 ^ ch, 3266489909);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  h3 = Math.imul(h3 ^ (h3 >>> 16), 2246822507) ^ Math.imul(h4 ^ (h4 >>> 13), 3266489909);
+  h4 = Math.imul(h4 ^ (h4 >>> 16), 2246822507) ^ Math.imul(h3 ^ (h3 >>> 13), 3266489909);
+  return [h1, h2, h3, h4]
+    .map((n) => (n >>> 0).toString(16).padStart(8, "0"))
+    .join("");
 }

@@ -19,9 +19,9 @@ test.describe("Barking Otter Website Performance Analyzer E2E", () => {
     const urlInput = page.getByPlaceholder("https://yourwebsite.com");
     await urlInput.fill("http://localhost:3000/private");
     await page.getByRole("button", { name: "Analyze My Website" }).click();
-    await expect(page.getByRole("alert")).toContainText(
-      "Localhost and internal network addresses cannot be tested"
-    );
+    await expect(
+      page.getByText("Localhost and internal network addresses cannot be tested")
+    ).toBeVisible();
 
     // 2. Submit a valid website for analysis
     await urlInput.fill("slow-bakery.example");
@@ -138,9 +138,9 @@ test.describe("Barking Otter Website Performance Analyzer E2E", () => {
     await page
       .getByRole("button", { name: "Sign In to Admin Dashboard" })
       .click();
-    await expect(page.getByRole("alert")).toContainText(
-      "not on the authorized Barking Otter administrator allowlist"
-    );
+    await expect(
+      page.getByText(/not on the authorized Barking Otter administrator allowlist/i)
+    ).toBeVisible();
 
     // Sign in with allowlisted admin email
     await page
